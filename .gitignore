@@ -7,3 +7,13 @@ node_modules/
 
 # Arquivos temporarios de metricas (resultados .csv podem ser versionados)
 metrics/_*
+
+# Intermediarios do LaTeX (mantemos .tex e .pdf)
+*.aux
+*.toc
+*.out
+*.nav
+*.snm
+*.vrb
+*.fls
+*.fdb_latexmk

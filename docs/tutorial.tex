@@ -1,0 +1,366 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazilian]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!50},
+  backgroundcolor=\color{codebg},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  captionpos=b,
+  xleftmargin=4pt,
+  xrightmargin=4pt
+}
+
+\title{\textbf{Comunicação Convergente: do Chat à Voz}\\[4pt]
+\large Fundamentação Teórica e Tutorial de Instalação\\
+\normalsize WebSocket + SIP/WebRTC + Asterisk em containers Docker}
+\author{Lucas Alves \\ \small Orientadora: Luciana Pereira Oliveira \\ \small Disciplina: Redes Convergentes --- IFPB}
+\date{2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent Este documento apresenta a fundamentação teórica e o tutorial prático de um
+projeto de \emph{redes convergentes}: uma aplicação web em que dois usuários conversam
+por texto em tempo real (\textbf{WebSocket}) e, com um único clique, \emph{escalam} a
+conversa para uma chamada de voz (\textbf{SIP/WebRTC}) orquestrada pelo \textbf{Asterisk}.
+Todo o ambiente é empacotado em \textbf{containers Docker}, garantindo portabilidade e
+reprodutibilidade. A Parte~I cobre os conceitos (funcionamento, arquitetura, aplicações,
+vantagens e limitações) e a Parte~II traz o passo a passo de instalação, configuração e uso.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+\hrule
+\bigskip
+
+% =====================================================================
+\section{Introdução e tema}
+% =====================================================================
+
+\emph{Convergência de redes} é a tendência de transportar voz, dados e vídeo sobre uma
+mesma infraestrutura IP, em vez de redes separadas para cada serviço. O projeto aqui
+documentado é um exemplo didático dessa convergência: uma única aplicação web faz conviver
+\textbf{dois meios de comunicação distintos} --- mensageria em tempo real (texto) e voz ---
+e permite a transição transparente de um para o outro.
+
+O cenário é familiar no mercado: muitos atendimentos começam por chat e, quando o texto não
+basta, ``sobem'' para uma ligação. Reproduzir isso exige combinar tecnologias de mundos
+diferentes: o WebSocket (web/dados) e o SIP/WebRTC (telefonia/voz). É exatamente essa
+\emph{integração} que caracteriza um sistema convergente.
+
+% =====================================================================
+\part*{Parte I --- Fundamentação teórica}
+\addcontentsline{toc}{section}{Parte I --- Fundamentação teórica}
+% =====================================================================
+
+\section{Do HTTP ao tempo real: WebSocket}
+
+O \textbf{HTTP} é um protocolo \emph{requisição--resposta} e sem estado: o cliente pergunta,
+o servidor responde, e a conexão se encerra. Esse modelo é ótimo para páginas e APIs, mas
+ruim para comunicação \emph{bidirecional em tempo real}, pois o servidor não consegue enviar
+dados ao cliente por iniciativa própria. As soluções antigas (\emph{polling} e
+\emph{long-polling}) ficam perguntando ``tem novidade?'' repetidamente, desperdiçando rede e
+adicionando latência.
+
+O \textbf{WebSocket} (RFC~6455) resolve isso. A conexão começa como um HTTP comum e é
+\emph{promovida} (\emph{upgrade}) para um canal persistente e full-duplex sobre a mesma porta
+TCP. O handshake é uma requisição com os cabeçalhos \verb|Connection: Upgrade| e
+\verb|Upgrade: websocket|, à qual o servidor responde com \verb|101 Switching Protocols|.
+A partir daí, cliente e servidor trocam \emph{frames} livremente, nos dois sentidos, com
+pouquíssima sobrecarga por mensagem.
+
+\paragraph{Aplicações.} Chats, dashboards ao vivo, jogos multiplayer, edição colaborativa,
+notificações \emph{push} e cotações financeiras.
+
+\paragraph{Vantagens.} Comunicação bidirecional de baixa latência; menor sobrecarga que o
+\emph{polling}; usa as portas 80/443, atravessando a maioria dos \emph{firewalls}.
+
+\paragraph{Limitações.} A conexão tem estado, o que complica o balanceamento de carga e a
+escalabilidade horizontal; alguns \emph{proxies} antigos não suportam o \emph{upgrade}; e
+perde-se a semântica de cache e métodos do HTTP.
+
+\section{Voz sobre IP: SIP, RTP e WebRTC}
+
+\subsection{SIP e RTP}
+A \textbf{VoIP} (Voz sobre IP) transporta áudio pela rede de dados. Para isso são necessários
+dois protocolos com papéis distintos:
+
+\begin{itemize}[nosep]
+  \item \textbf{SIP} (\emph{Session Initiation Protocol}, RFC~3261): protocolo de
+  \emph{sinalização}. É ele que registra os ramais (\verb|REGISTER|), inicia chamadas
+  (\verb|INVITE|), e as encerra (\verb|BYE|). O SIP \emph{não} carrega o áudio: ele negocia
+  \emph{onde} e \emph{como} o áudio vai trafegar (via SDP).
+  \item \textbf{RTP} (\emph{Real-time Transport Protocol}): protocolo que de fato carrega os
+  pacotes de áudio/vídeo, geralmente sobre UDP, com numeração de sequência e marca de tempo
+  para reconstruir o fluxo.
+\end{itemize}
+
+\subsection{WebRTC}
+O \textbf{WebRTC} leva a comunicação de mídia em tempo real para \emph{dentro do navegador},
+sem plugins. Seus pilares:
+
+\begin{itemize}[nosep]
+  \item \verb|getUserMedia|: captura o microfone/câmera (exige \emph{contexto seguro}:
+  HTTPS ou \verb|localhost|).
+  \item \textbf{DTLS-SRTP}: a mídia é \emph{obrigatoriamente} cifrada --- não existe WebRTC
+  ``em claro''.
+  \item \textbf{ICE/STUN/TURN}: descobrem caminhos de rede para atravessar NAT/\emph{firewall}.
+  \item Codecs de áudio: \textbf{Opus} (padrão, banda variável) e \textbf{G.711}
+  (\emph{ulaw}/\emph{alaw}, 64\,kbps).
+\end{itemize}
+
+\subsection{SIP sobre WebSocket: a ponte}
+Como unir o navegador (WebRTC) ao mundo SIP? Transportando a \emph{sinalização SIP dentro de
+um WebSocket}. Uma biblioteca JavaScript como o \textbf{JsSIP} transforma o navegador em um
+\emph{softphone}: ela abre um WebSocket para o servidor SIP e troca mensagens SIP por ele,
+enquanto o áudio segue por WebRTC (DTLS-SRTP). É essa combinação que permite uma chamada de
+voz \emph{100\% no navegador}, sem instalar nada.
+
+\section{Asterisk e a interface de gerência (AMI)}
+
+O \textbf{Asterisk} é o \emph{PBX} (central telefônica) de código aberto mais usado do mundo.
+No projeto, ele atua como o servidor SIP: registra os ramais, faz a ponte entre as chamadas e
+fala WebRTC com os navegadores através do módulo \verb|chan_pjsip| com transporte WebSocket.
+
+Além do SIP, o Asterisk expõe a \textbf{AMI} (\emph{Asterisk Manager Interface}), uma interface
+de gerência por TCP. Por ela, uma aplicação externa pode comandar o Asterisk --- por exemplo,
+emitir um \verb|Originate| para iniciar uma chamada entre dois ramais. É esse comando que
+implementa a ``escalada'' do chat para a voz: o servidor de chat, ao receber o clique, pede ao
+Asterisk que ligue os dois usuários (\emph{click-to-call}).
+
+\section{Containers: portabilidade e reprodutibilidade}
+
+O \textbf{Docker} empacota cada serviço (Asterisk, servidor de chat) com todas as suas
+dependências em uma \emph{imagem}, que roda igual em qualquer máquina. O
+\textbf{docker-compose} descreve e sobe todo o conjunto com um comando. O ganho é direto para
+um trabalho acadêmico: o avaliador clona o repositório e reproduz o ambiente \emph{idêntico},
+sem ``na minha máquina funciona''. Essa é a base do critério de \emph{reprodutibilidade}.
+
+\section{Arquitetura do projeto}
+
+A figura a seguir resume os componentes e o fluxo da escalada:
+
+\begin{lstlisting}
+  Navegador (Alice)                         Navegador (Bob)
+  +------------------+                      +------------------+
+  | Chat  (WebSocket)|<----- ws:3000 ------>| Chat  (WebSocket)|
+  | Voz   (WebRTC)   |<----- ws:8088 ------>| Voz   (WebRTC)   |
+  +--------+---------+                      +---------+--------+
+           |  (1) clique "Escalar"                    |
+           v                                          v
+     +-------------+    (2) AMI Originate      +--------------+
+     | chat-server |------------------------->|   Asterisk   |
+     |   (Node)    |                          | (chan_pjsip) |
+     +-------------+    (3) toca os 2 ramais  +--------------+
+\end{lstlisting}
+
+\noindent Há \textbf{dois canais} convivendo: o chat trafega pelo WebSocket do
+\verb|chat-server| (porta 3000); a voz trafega pelo WebSocket SIP do Asterisk (porta 8088) e
+pela mídia WebRTC. O clique de escalada vai pelo canal de dados; a chamada resultante vem pelo
+canal de voz --- a convergência em ação.
+
+\section{Aplicações no mercado de trabalho}
+
+\begin{itemize}[nosep]
+  \item \textbf{Contact centers e plataformas omnichannel}: o atendimento começa por chat e
+  escala para voz no mesmo fluxo (Zendesk, Twilio Flex, etc.).
+  \item \textbf{Click-to-call} em sites de e-commerce e suporte (``fale com um atendente'').
+  \item \textbf{Colaboração e conferência}: Microsoft Teams, Google Meet, Discord e Jitsi
+  usam WebRTC para voz/vídeo no navegador.
+  \item \textbf{Telemedicina e \emph{helpdesk}}: chat clínico/técnico que vira teleconsulta.
+  \item \textbf{Telefonia corporativa}: o Asterisk é amplamente usado como PBX/IP-PBX em
+  empresas e provedores.
+\end{itemize}
+
+\section{Vantagens e limitações da solução}
+
+\paragraph{Vantagens.}
+\begin{itemize}[nosep]
+  \item Uma única \emph{stack} web atende dados \emph{e} voz.
+  \item Voz no navegador, sem plugin ou \emph{softphone} externo.
+  \item Mídia sempre cifrada (DTLS-SRTP).
+  \item Ambiente portátil e reprodutível via containers.
+\end{itemize}
+
+\paragraph{Limitações.}
+\begin{itemize}[nosep]
+  \item O WebRTC exige \emph{contexto seguro} (HTTPS/\verb|localhost|) e, em produção,
+  servidores TURN para atravessar NAT.
+  \item A configuração de WebRTC no Asterisk tem curva de aprendizado (transporte, DTLS, ICE).
+  \item O uso de \verb|network_mode: host| (que simplifica a mídia no laboratório) é restrito
+  ao Linux.
+\end{itemize}
+
+% =====================================================================
+\part*{Parte II --- Tutorial de instalação e configuração}
+\addcontentsline{toc}{section}{Parte II --- Tutorial de instalação e configuração}
+% =====================================================================
+
+\section{Pré-requisitos}
+
+\begin{itemize}[nosep]
+  \item \textbf{Sistema operacional Linux} (por causa do \verb|network_mode: host|).
+  \item \textbf{Docker} e \textbf{docker-compose} instalados.
+  \item Acesso de \emph{root}/\verb|sudo| ao Docker.
+  \item Um \textbf{navegador} moderno (Chrome/Firefox) com microfone.
+  \item Portas livres: \verb|3000| (front/chat), \verb|8088| (SIP/WS), \verb|5038| (AMI) e
+  \verb|10000-10100/udp| (RTP).
+\end{itemize}
+
+\section{Obtenção do projeto}
+
+\begin{lstlisting}[language=bash]
+git clone git@github.com:lcsg7/redes-convergentes.git
+cd redes-convergentes
+\end{lstlisting}
+
+\section{Estrutura de diretórios}
+
+\begin{lstlisting}
+redes-convergentes/
+|- docker-compose.yml        # orquestra os 2 servicos
+|- asterisk/
+|  |- Dockerfile             # Ubuntu 22.04 + Asterisk 18
+|  \- config/                # http, pjsip (WebRTC), dialplan, AMI, modules
+|- chat-server/
+|  |- Dockerfile             # Node 20
+|  |- server.js              # chat (WebSocket) + AMI Originate + coletor CSV
+|  \- public/                # front: index.html, app.js (JsSIP), vendor/
+|- scripts/netem.sh          # perfis de degradacao de rede (tc/netem)
+|- analysis/analise.ipynb    # notebook dos graficos
+\- metrics/                  # saida das medicoes (metrics.csv)
+\end{lstlisting}
+
+\section{Componentes comentados}
+
+\subsection{Orquestração (docker-compose.yml)}
+Sobe dois serviços em \verb|network_mode: host| (no Linux, navegador e Asterisk se enxergam em
+\verb|127.0.0.1|, o que simplifica a mídia WebRTC). O \verb|chat-server| monta o front e o
+\verb|server.js| como volumes, além do diretório \verb|metrics| (compartilhado com o host).
+
+\subsection{Asterisk}
+Pontos-chave da configuração em \verb|asterisk/config/|:
+\begin{itemize}[nosep]
+  \item \verb|http.conf|: habilita o servidor HTTP em \verb|:8088|, onde fica o endpoint
+  WebSocket SIP (\verb|/ws|).
+  \item \verb|pjsip.conf|: define o transporte WebSocket e dois \emph{endpoints} WebRTC
+  (\verb|alice| e \verb|bob|) com \verb|webrtc=yes| e \verb|dtls_auto_generate_cert=yes|.
+  \item \verb|extensions.conf|: o plano de discagem que liga os ramais.
+  \item \verb|manager.conf|: o usuário AMI usado pelo \verb|chat-server| para o
+  \verb|Originate|.
+  \item \verb|modules.conf|: \textbf{desabilita o \texttt{chan\_sip}} --- detalhe crítico,
+  explicado na seção de solução de problemas.
+\end{itemize}
+
+\subsection{Servidor de chat (server.js)}
+Um servidor Node que: (i) serve o front; (ii) mantém o chat por WebSocket; (iii) ao receber o
+evento de escalada, emite um \verb|Originate| via AMI para o Asterisk; e (iv) registra as
+métricas de cada chamada (tempo de estabelecimento e duração) em \verb|metrics/metrics.csv|.
+
+\subsection{Front-end (JsSIP)}
+A página carrega o \textbf{JsSIP} (hospedado localmente em \verb|public/vendor/|), que
+registra o navegador como ramal WebRTC no Asterisk e atende as chamadas. O mesmo HTML mantém o
+chat por um WebSocket nativo --- os dois canais lado a lado.
+
+\section{Subir o ambiente}
+
+\begin{lstlisting}[language=bash]
+docker-compose up --build      # use sudo se o Docker exigir
+\end{lstlisting}
+
+\noindent O primeiro \emph{build} baixa o Ubuntu/Asterisk e as dependências do Node (precisa
+de internet). Ao final, os dois containers ficam \emph{Up}.
+
+\section{Verificação}
+
+\begin{lstlisting}[language=bash]
+# ramais alice/bob existem?
+docker exec conv-asterisk asterisk -rx "pjsip show endpoints"
+
+# o endpoint WebSocket /ws responde ao handshake? (espera 101 + protocol sip)
+curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlc2FtcGxl" \
+  -H "Sec-WebSocket-Protocol: sip" http://localhost:8088/ws
+
+# o servidor de chat conectou no AMI?
+docker logs conv-chat-server
+\end{lstlisting}
+
+\section{Uso}
+
+\begin{enumerate}[nosep]
+  \item Abra \url{http://localhost:3000} em \textbf{duas} janelas.
+  \item Entre como \textbf{Alice} em uma e \textbf{Bob} na outra; permita o microfone.
+  \item Confirme o indicador \textbf{``SIP: registrado''} no topo.
+  \item Troque mensagens de texto (canal WebSocket).
+  \item Clique em \textbf{``Escalar para ligação''}: os dois navegadores tocam e atendem
+  automaticamente --- agora é voz (canal SIP/WebRTC).
+\end{enumerate}
+
+\noindent \emph{Dica:} na mesma máquina, use fone de ouvido (os dois lados dividem o
+microfone/alto-falante e geram eco).
+
+\section{Experimento e coleta de métricas}
+
+Cada chamada encerrada grava uma linha em \verb|metrics/metrics.csv|
+(\verb|timestamp,tag,setup_ms,duration_s|). O perfil de rede ativo é controlado pelo script
+\verb|netem.sh|, que degrada a interface \verb|lo|:
+
+\begin{lstlisting}[language=bash]
+sudo bash scripts/netem.sh apply 100 0 delay100  # atraso de 100 ms
+sudo bash scripts/netem.sh apply 0 5  loss5       # perda de 5%
+sudo bash scripts/netem.sh clear                  # remove a degradacao
+\end{lstlisting}
+
+\noindent Para cada perfil, aplique o \verb|netem| e rode dezenas de escaladas; depois abra
+\verb|analysis/analise.ipynb| (Jupyter ou o JupyterLite do GPSC) para gerar os gráficos de
+tempo de estabelecimento, duração e banda.
+
+\section{Solução de problemas (\emph{troubleshooting})}
+
+\begin{itemize}[nosep]
+  \item \textbf{SIP não registra / WebRTC não conecta:} provavelmente o \verb|chan_sip|
+  (driver SIP antigo) está roubando o sub-protocolo WebSocket \verb|sip| antes do PJSIP. A
+  correção é o \verb|noload => chan_sip.so| no \verb|modules.conf| (já incluído).
+  \item \textbf{Microfone bloqueado:} acesse por \verb|http://localhost| (contexto seguro);
+  por IP o navegador bloqueia a captura.
+  \item \textbf{Asterisk não instala no Debian:} o pacote foi removido do Debian; por isso a
+  imagem usa \verb|ubuntu:22.04|.
+  \item \textbf{Erro \texttt{KeyError: 'ContainerConfig'} ao recriar:} é um \emph{bug} do
+  docker-compose v1 com o Docker novo. Contorne com
+  \verb|docker-compose down && docker-compose up -d --build|.
+\end{itemize}
+
+\section{Conclusão}
+
+O projeto demonstra, de ponta a ponta, a convergência de \emph{dados} e \emph{voz} sobre IP:
+um chat em tempo real (WebSocket) que escala para uma chamada de voz (SIP/WebRTC) sem sair do
+navegador, com todo o ambiente reproduzível em containers. Os conceitos teóricos (WebSocket,
+SIP, WebRTC, Asterisk) se materializam num cenário prático e mensurável, alinhado aos
+objetivos da disciplina de Redes Convergentes.
+
+\begin{thebibliography}{9}
+\bibitem{ws} FETTE, I.; MELNIKOV, A. \emph{RFC 6455 --- The WebSocket Protocol}. IETF, 2011.
+\bibitem{sip} ROSENBERG, J. et al. \emph{RFC 3261 --- SIP: Session Initiation Protocol}. IETF, 2002.
+\bibitem{webrtc} W3C. \emph{WebRTC: Real-Time Communication in Browsers}. \url{https://www.w3.org/TR/webrtc/}.
+\bibitem{asterisk} SANGOMA. \emph{Asterisk Documentation}. \url{https://docs.asterisk.org/}.
+\bibitem{jssip} VERSATICA. \emph{JsSIP --- The JavaScript SIP library}. \url{https://jssip.net/}.
+\bibitem{docker} DOCKER INC. \emph{Docker Documentation}. \url{https://docs.docker.com/}.
+\end{thebibliography}
+
+\end{document}

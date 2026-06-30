@@ -1,0 +1,139 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazilian]{babel}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\setbeamertemplate{navigation symbols}{}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true
+}
+
+\title[Comunicação Convergente]{Comunicação Convergente: do Chat à Voz}
+\subtitle{WebSocket + SIP/WebRTC + Asterisk em containers}
+\author[Lucas Alves]{Lucas Alves \\ \small Orientadora: Luciana Pereira Oliveira}
+\institute[IFPB]{Redes Convergentes --- IFPB}
+\date{2026}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{O tema}
+  \textbf{Convergência de redes:} transportar voz, dados e vídeo sobre a mesma
+  infraestrutura IP.
+  \vfill
+  \textbf{O projeto:} uma aplicação web em que dois usuários conversam por
+  \alert{texto} (tempo real) e, com um clique, \alert{escalam} para uma chamada de
+  \alert{voz} --- tudo dentro do navegador.
+  \vfill
+  Dois meios de comunicação distintos convivendo: a convergência em ação.
+\end{frame}
+
+\begin{frame}{Problema e objetivo}
+  \textbf{Problema:} como integrar mensageria em tempo real (WebSocket) e voz
+  (SIP/WebRTC) numa mesma aplicação, e qual o \emph{custo} dessa convergência sob
+  diferentes condições de rede?
+  \vfill
+  \textbf{Objetivo:} construir e \emph{caracterizar} a aplicação em containers,
+  medindo tempo de estabelecimento, duração e qualidade da chamada.
+\end{frame}
+
+\begin{frame}[fragile]{Tecnologia 1: WebSocket (o canal de dados)}
+  \begin{itemize}
+    \item HTTP é requisição--resposta: ruim para tempo real (\emph{polling} desperdiça rede).
+    \item \textbf{WebSocket} (RFC 6455): começa como HTTP e faz \emph{upgrade}
+      (\verb|101 Switching Protocols|) para um canal \alert{full-duplex} persistente.
+    \item Baixa latência e baixa sobrecarga; ideal para \alert{chat}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Tecnologia 2: voz (SIP + WebRTC + Asterisk)}
+  \begin{itemize}
+    \item \textbf{SIP} sinaliza a chamada (\verb|REGISTER|, \verb|INVITE|, \verb|BYE|);
+      \textbf{RTP} carrega o áudio.
+    \item \textbf{WebRTC}: voz no navegador, com mídia cifrada (DTLS-SRTP).
+    \item \textbf{SIP sobre WebSocket} (JsSIP): transforma o navegador em \emph{softphone}.
+    \item \textbf{Asterisk} (PBX) faz a ponte; via \textbf{AMI Originate} dispara a
+      chamada (\emph{click-to-call}).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Arquitetura}
+\begin{lstlisting}
+  Navegador (Alice)                       Navegador (Bob)
+  +------------------+                    +------------------+
+  | Chat  (WebSocket)|<---- ws:3000 ----->| Chat  (WebSocket)|
+  | Voz   (WebRTC)   |<---- ws:8088 ----->| Voz   (WebRTC)   |
+  +--------+---------+                    +---------+--------+
+           | (1) clique "Escalar"                   |
+           v                                        v
+     +-------------+   (2) AMI Originate    +--------------+
+     | chat-server |----------------------->|   Asterisk   |
+     |   (Node)    |   (3) toca os ramais   | (chan_pjsip) |
+     +-------------+                        +--------------+
+\end{lstlisting}
+  \small O clique vai pelo canal de \alert{dados}; a chamada volta pelo canal de \alert{voz}.
+\end{frame}
+
+\begin{frame}[fragile]{Demonstração prática}
+  \begin{enumerate}
+    \item \verb|docker-compose up --build| sobe Asterisk + chat-server.
+    \item Dois navegadores em \verb|localhost:3000| (Alice e Bob) registram via WebRTC.
+    \item Chat por texto $\rightarrow$ clique em \alert{``Escalar''} $\rightarrow$ voz.
+    \item \verb|sngrep| / Wireshark mostram a sinalização SIP e o RTP cifrado.
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}[fragile]{Experimento e métricas}
+  \textbf{Variáveis} (via \verb|tc/netem|): atraso, perda de pacotes, codec.
+  \vfill
+  \textbf{Métricas} (coletadas em \verb|metrics.csv|): tempo de estabelecimento da
+  chamada, duração, banda por canal, jitter/perda RTP.
+  \vfill
+  \textbf{Análise:} notebook Jupyter gera os gráficos (setup $\times$ degradação,
+  banda texto $\times$ voz).
+\end{frame}
+
+\begin{frame}[fragile]{Dificuldades encontradas e soluções}
+  \begin{itemize}
+    \item \textbf{Asterisk fora do Debian} (pacote removido) $\rightarrow$ base
+      \verb|ubuntu:22.04|.
+    \item \textbf{\texttt{chan\_sip} roubava o sub-protocolo \texttt{sip} do WebSocket},
+      quebrando o WebRTC $\rightarrow$ \verb|noload => chan_sip.so|.
+    \item \textbf{JsSIP via CDN dava 404} $\rightarrow$ biblioteca \emph{vendorizada}
+      localmente.
+    \item \textbf{Mídia WebRTC + NAT} no laboratório $\rightarrow$
+      \verb|network_mode: host| (tráfego em \verb|127.0.0.1|).
+    \item \textbf{Bug \texttt{ContainerConfig} do docker-compose v1} $\rightarrow$
+      \verb|down| antes de \verb|up|.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Conclusão}
+  \begin{itemize}
+    \item Convergência \alert{dados + voz} demonstrada de ponta a ponta, sem plugins.
+    \item Ambiente \alert{reproduzível} em containers: clone + \emph{up}.
+    \item Teoria (WebSocket, SIP, WebRTC, Asterisk) materializada em um cenário
+      prático e \alert{mensurável}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Obrigado!}
+  \centering
+  \Large Perguntas?
+  \vfill
+  \normalsize \url{https://github.com/lcsg7/redes-convergentes}
+\end{frame}
+
+\end{document}
