@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat &rarr; Ligacao | Redes Convergentes</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- JsSIP (hospedado localmente): faz o navegador virar um softphone WebRTC -->
+  <script src="vendor/jssip.min.js"></script>
+</head>
+<body>
+  <!-- Tela de login: escolha quem voce e -->
+  <div id="login" class="card">
+    <h1>Comunicacao Convergente</h1>
+    <p>Chat em tempo real (WebSocket) que <b>escala</b> para voz (SIP/WebRTC).</p>
+    <p>Entre como:</p>
+    <div class="row">
+      <button class="btn" onclick="App.start('alice')">Entrar como Alice</button>
+      <button class="btn" onclick="App.start('bob')">Entrar como Bob</button>
+    </div>
+    <small>Abra esta pagina em duas janelas (uma Alice, uma Bob) e permita o microfone.</small>
+  </div>
+
+  <!-- Tela principal -->
+  <div id="app" class="card hidden">
+    <header>
+      <span>Logado como <b id="me"></b></span>
+      <span id="sipStatus" class="status off">SIP: conectando...</span>
+    </header>
+
+    <div id="messages"></div>
+
+    <div class="row">
+      <input id="input" type="text" placeholder="Digite uma mensagem..." autocomplete="off" />
+      <button class="btn" onclick="App.sendChat()">Enviar</button>
+    </div>
+
+    <div class="row call-bar">
+      <button id="escalateBtn" class="btn call" onclick="App.escalate()">Escalar para ligacao</button>
+      <button id="hangupBtn" class="btn hangup hidden" onclick="App.hangup()">Desligar</button>
+      <span id="callStatus"></span>
+    </div>
+  </div>
+
+  <!-- Audio remoto da chamada -->
+  <audio id="remoteAudio" autoplay></audio>
+
+  <script src="app.js"></script>
+</body>
+</html>

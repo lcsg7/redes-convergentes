@@ -1,0 +1,9 @@
+node_modules/
+*.log
+.env
+
+# Config local do Claude Code (tooling, nao faz parte do projeto)
+.claude/
+
+# Arquivos temporarios de metricas (resultados .csv podem ser versionados)
+metrics/_*

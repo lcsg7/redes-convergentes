@@ -1,0 +1,14 @@
+{
+  "name": "conv-chat-server",
+  "version": "1.0.0",
+  "description": "Servidor de chat (WebSocket) que escala a conversa para uma chamada de voz no Asterisk via AMI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0",
+    "asterisk-manager": "^0.2.0"
+  }
+}

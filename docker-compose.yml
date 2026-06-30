@@ -1,0 +1,36 @@
+version: "3.8"
+
+# Projeto: Comunicacao convergente - escalada de chat (WebSocket) para voz (SIP/WebRTC)
+# Cadeira: Redes Convergentes
+#
+# Usamos network_mode: host para simplificar a midia WebRTC (RTP/DTLS) num lab
+# local: o navegador (no host) alcanca o Asterisk em 127.0.0.1 sem traducao de NAT.
+# Requisito: host Linux (e o seu caso).
+
+services:
+  asterisk:
+    build: ./asterisk
+    container_name: conv-asterisk
+    network_mode: host
+    restart: unless-stopped
+
+  chat-server:
+    build: ./chat-server
+    container_name: conv-chat-server
+    network_mode: host
+    volumes:
+      # front e server montados como volume: editar nao exige rebuild da imagem
+      # (basta `docker restart conv-chat-server`)
+      - ./chat-server/public:/app/public
+      - ./chat-server/server.js:/app/server.js
+      # metricas do experimento (lidas/escritas tambem pelo host e pelo notebook)
+      - ./metrics:/app/metrics
+    environment:
+      - PORT=3000
+      - AMI_HOST=127.0.0.1
+      - AMI_PORT=5038
+      - AMI_USER=admin
+      - AMI_SECRET=amisecret
+    depends_on:
+      - asterisk
+    restart: unless-stopped
